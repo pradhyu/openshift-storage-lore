@@ -1,4 +1,74 @@
-# Viewing OpenShift PVC Files: Complete Guide
+# OpenShift Storage & Persistent Volumes: Architecture & Operations Guide
+
+A comprehensive architectural and operations guide covering PersistentVolumeClaim (PVC) file inspection, static NFS provisioning, enterprise multi-protocol NAS, Ceph RBD block storage, CephFS distributed filesystems, and cloud-native database storage.
+
+---
+
+## Table of Contents
+
+* [1. Viewing PVC Files Without a Dedicated Mount / Pod](#1-viewing-pvc-files-without-a-dedicated-mount--pod)
+  * [The Short Answer](#the-short-answer)
+  * [Practical Solutions & Workarounds](#practical-solutions--workarounds)
+    * [Option 1: Existing Running Pod (`oc exec` / `oc rsync`)](#option-1-an-existing-pod-is-already-running-no-new-pod-needed)
+    * [Option 2: Self-Cleaning Ephemeral Debug Pod (`oc run --rm`)](#option-2-no-pod-running--ephemeral-one-liner-self-cleaning)
+    * [Option 3: Underlying Storage Provider Direct Access](#option-3-access-via-underlying-storage-provider-outside-openshift)
+    * [Option 4: Node-Level Inspection via `oc debug node`](#option-4-node-level-inspection-via-oc-debug-node-cluster-admin)
+  * [Inspection Comparison Summary](#comparison-summary)
+* [2. Setting Up NFS Storage: Step-by-Step (PV & PVC)](#setting-up-nfs-storage-step-by-step-pv--pvc)
+* [3. Quick Reference Notes: Cloud & Object Storage Options](#quick-reference-notes-cloud--object-storage-options)
+* [4. Enterprise & OpenShift-Native Implementations (Deep Dive)](#deep-dive-enterprise--openshift-native-implementations-options-3-to-5)
+  * [Deep Dive 1: OpenShift Data Foundation (ODF / CephFS)](#deep-dive-1-openshift-data-foundation-odf--cephfs)
+  * [Deep Dive 2: Enterprise Multi-Protocol NAS CSI (NetApp Trident)](#deep-dive-2-enterprise-multi-protocol-nas-csi-netapp-trident--dell-powerscale)
+  * [Deep Dive 3: Universal In-Cluster SFTP Gateway & Sidecar Patterns](#deep-dive-3-universal-in-cluster-sftp-gateway--sidecar-patterns)
+* [5. Architecture Selection Decision Matrix](#architecture-selection-decision-matrix)
+* [6. Ceph RBD (`ocs-storagecluster-ceph-rbd`) vs. NAS (NFS / CephFS)](#deep-dive-ceph-rbd-ocs-storagecluster-ceph-rbd-vs-nas-nfs--cephfs)
+  * [Core Architectural Difference: Block vs. File](#core-architectural-difference-block-vs-file)
+  * [Why Ceph RBD is Better than NAS (7 Technical Advantages)](#why-ceph-rbd-is-better-than-nas-7-technical-advantages)
+  * [Workload Decision Matrix: When to Choose RBD vs. NAS](#workload-decision-matrix-when-to-choose-rbd-vs-nas)
+* [7. Solving the RWO Constraint: Multi-Pod Read/Write (RWX) Needs](#solving-the-rwo-constraint-how-to-handle-multi-pod-readwrite-rwx-needs)
+* [8. How Databases Actually Use RWO Storage in OpenShift (StatefulSets & Operators)](#how-databases-actually-use-rwo-storage-in-openshift-statefulsets--operators)
+  * [The Architecture: Share Nothing (Replication via Network, Not Disk)](#the-architecture-share-nothing-replication-via-network-not-disk)
+  * [How Client Traffic is Routed: Primary vs. Replicas Services](#how-client-traffic-is-routed-primary-vs-replicas-services)
+  * [How Kubernetes Automates This: StatefulSet with volumeClaimTemplates](#how-kubernetes-automates-this-statefulset-with-volumeclaimtemplates)
+* [9. Clearing Up the Myth: Does RWO Mean "One Writer, Multiple Readers"?](#clearing-up-the-myth-does-rwo-mean-one-writer-multiple-readers)
+* [10. Ceph RBD Architecture: Local Node vs. Remote Storage](#ceph-rbd-architecture-are-files-written-on-the-local-node-or-on-remote-servers)
+* [11. Why Ceph RBD is Faster Than NFS Even Though Both Are Remote](#why-ceph-rbd-is-faster-than-nfs-even-though-both-are-remote)
+  * [Protocol Chattiness: 1 Block RPC vs. 6+ File RPCs](#1-protocol-chattiness-1-block-rpc-vs-6-file-rpcs)
+  * [Striping Across Many Servers (CRUSH) vs. Single-Server Bottleneck](#2-striping-across-many-servers-crush-vs-single-server-bottleneck)
+  * [No Filesystem Metadata Overhead on the Storage Cluster](#3-no-filesystem-metadata-overhead-on-the-storage-cluster)
+  * [Safe Local Linux Page Caching](#4-safe-local-linux-page-caching)
+  * [Multi-Queue Block I/O (`blk-mq`) and Deep Concurrency](#5-multi-queue-block-io-blk-mq-and-deep-concurrency)
+  * [Performance Comparison: Ceph RBD vs. Traditional NFS](#performance-comparison-ceph-rbd-vs-traditional-nfs)
+* [12. CephFS vs. NFS: Are They the Same? What is the Difference?](#cephfs-vs-nfs-are-they-the-same-what-is-the-difference)
+  * [Core Architectural Comparison](#core-architectural-comparison)
+  * [6 Key Differences Between CephFS and NFS](#6-key-differences-between-cephfs-and-nfs)
+  * [Comparison Matrix: CephFS vs. Traditional NFS](#comparison-matrix-cephfs-vs-traditional-nfs)
+* [13. Allowing Users to Download Files from a CephFS PVC](#13-allowing-users-to-download-files-from-a-cephfs-pvc)
+  * [The Superpower of CephFS: Concurrent Multi-Pod Access](#the-superpower-of-cephfs-concurrent-multi-pod-access)
+  * [Method 1: Web Browser Download Portal (FileBrowser)](#method-1-web-browser-download-portal-via-filebrowser-recommended-for-end-users)
+  * [Method 2: High-Speed HTTP Directory Index (Nginx)](#method-2-high-speed-http-directory-index-via-nginx-fastest-for-direct-file-links)
+  * [Method 3: In-Cluster SFTP Gateway (WinSCP / FileZilla)](#method-3-in-cluster-sftp-gateway-for-winscp-filezilla-and-batch-jobs)
+    * [Connecting WinSCP via Ingress (WebDAV Protocol)](#what-if-you-must-use-openshift-ingress--port-443-with-winscp-the-webdav-solution)
+  * [Method 4: Developer & Admin CLI Downloads (oc rsync / oc cp)](#method-4-developer--admin-cli-downloads-no-new-pods-needed)
+  * [Security Best Practices for CephFS File Downloads](#security-best-practices-for-cephfs-file-downloads)
+  * [Decision Matrix: Which Download Method Should You Use?](#decision-matrix-which-download-method-should-you-use)
+* [14. Modern Object Storage Gateway: Using RustFS with OpenShift PVCs](#14-modern-object-storage-gateway-using-rustfs-with-openshift-pvcs)
+  * [Why RustFS for This Use Case?](#why-rustfs-for-this-use-case)
+  * [Is RustFS a StorageClass or an Application?](#is-rustfs-a-storageclass-or-an-application-how-do-you-actually-use-it)
+  * [Is This Available Out-of-the-Box in OpenShift?](#is-this-available-out-of-the-box-in-openshift-native-odf-vs-third-party)
+  * [RustFS Architecture on OpenShift Storage](#rustfs-architecture-on-openshift-storage)
+  * [Mode 1: Standalone RustFS Gateway on an Existing PVC](#mode-1-standalone-rustfs-gateway-on-an-existing-pvc)
+  * [How to Access & Download Files via RustFS](#how-to-access--download-files-via-rustfs)
+    * [1. WinSCP via Native Amazon S3 Protocol](#1-winscp-via-native-amazon-s3-protocol-100-via-ingress-port-443)
+    * [2. Web Browser Downloads via RustFS Console](#2-web-browser-downloads-via-rustfs-console)
+    * [3. Programmatic Pre-Signed URLs](#3-programmatic-pre-signed-urls-time-limited-direct-links)
+    * [4. Command Line & Automation (aws-cli / rclone)](#4-command-line--automation-aws-cli--rclone)
+  * [Mode 2: Distributed High-Performance RustFS Cluster](#mode-2-distributed-high-performance-rustfs-cluster-statefulset--ceph-rbd)
+  * [Architectural Comparison: Traditional Protocols vs. RustFS S3](#architectural-comparison-traditional-protocols-vs-rustfs-s3)
+
+---
+
+## 1. Viewing PVC Files Without a Dedicated Mount / Pod
 
 A common question in OpenShift/Kubernetes administration: **Can you view files in a PersistentVolumeClaim (PVC) without a volume mount and without creating a new pod?**
 
@@ -1276,6 +1346,129 @@ This is the key test that proves data does **not** live on the worker node:
 
 ---
 
+## Why Ceph RBD is Faster Than NFS Even Though Both Are Remote
+
+A natural follow-up question arises: **"If Ceph RBD sends data blocks across the network to remote storage servers just like NFS does, why is Ceph RBD significantly faster (often 5x to 10x higher IOPS and drastically lower latency) than NFS?"**
+
+The performance difference does not come from physical wire distance—both travel over standard Ethernet or InfiniBand networks. The massive speed advantage comes from **architectural layering, network chattiness, and the fundamental differences between Block-level and File-level storage**.
+
+---
+
+### 1. Protocol Chattiness: 1 Block RPC vs. 6+ File RPCs
+
+When an application writes data to a file, the differences in protocol overhead between NFS and Ceph RBD are dramatic:
+
+#### NFS (File-Level Protocol): Extremely Chatty
+
+In NFS, every filesystem concept (directory traversal, permission checks, file allocation, byte-range locks) must be verified with the remote server over the network:
+
+```text
+Container write() ──► Linux VFS ──► NFS Client
+                                      │
+  (1) RPC: LOOKUP (resolve directory path and inode)   ──────► NFS Server
+  (2) RPC: ACCESS (check user permissions on remote host) ───► NFS Server
+  (3) RPC: OPEN   (open file descriptor)                ─────► NFS Server
+  (4) RPC: SETATTR / LOCK (acquire byte-range lock)     ─────► NFS Server
+  (5) RPC: WRITE  (send data payload)                   ─────► NFS Server
+  (6) RPC: COMMIT / CLOSE (flush and acknowledge)       ─────► NFS Server
+```
+
+* For a single small write, the client and server exchange **4 to 8 network round-trips**.
+* If network latency between nodes is 0.5 ms, 6 round trips equal **3.0 ms latency minimum** before the application receives write confirmation.
+
+#### Ceph RBD (Block-Level Protocol): Direct and Lean
+
+In Ceph RBD, the filesystem (`XFS` or `ext4`) lives **inside the worker node's Linux kernel**. Path resolution, permissions, and directory inodes are processed **locally in node RAM**:
+
+```text
+Container write() ──► Linux VFS (ext4/XFS in local RAM)
+                            │ (Local Inode & Permission Lookup: 0 µs)
+                            ▼
+                      Kernel Ceph RBD Driver (/dev/rbd0)
+                            │
+  (1) Single RPC: WRITE (Object ID: rbd_data.1234, Offset: 0, Len: 4096) ──► Ceph OSD
+```
+
+* **1 single network round-trip** directly to the target storage disk.
+* Latency overhead is purely the raw network packet transit time + NVMe/SSD commit time (~0.3 ms total).
+
+---
+
+### 2. Striping Across Many Servers (CRUSH) vs. Single-Server Bottleneck
+
+```text
+        NFS Storage Flow                                  Ceph RBD Storage Flow
+
+        Worker Node Pods                                    Worker Node Pods
+       [Pod A]  [Pod B]  [Pod C]                           [Pod A]  [Pod B]  [Pod C]
+          │        │        │                                 │        │        │
+          └────────┼────────┘                                 │        │        │
+                   ▼                                          ▼        ▼        ▼
+           ┌───────────────┐                            CRUSH Deterministic Calculation
+           │  NFS Server   │                                  │        │        │
+           │ (Single IP)   │                                  ▼        ▼        ▼
+           │ 1 Network Card│                             ┌────────┐┌────────┐┌────────┐
+           │ 1 CPU Core Set│                             │ Ceph   ││ Ceph   ││ Ceph   │
+           │ 1 Controller  │                             │ OSD 1  ││ OSD 2  ││ OSD 3  │
+           └───────────────┘                             └────────┘└────────┘└────────┘
+          All traffic chokes on                       Simultaneous parallel streams across
+           single server limits                        tens or hundreds of disks & NICs
+```
+
+* **NFS Bottleneck**:
+  An NFS mount points to a single IP address (`192.168.1.50:/exports/data`). Every read and write from every pod passes through that single machine's CPU, RAM, and network interface card (NIC).
+* **Ceph RBD Parallelism**:
+  An RBD disk is not stored on a single machine. It is divided into **4MB chunk objects** and distributed across dozens of physical disks and servers using the **CRUSH algorithm**:
+  * Pod writes Block 1 ➔ Streamed directly to **Server 1 / Disk 1**.
+  * Pod writes Block 2 ➔ Streamed directly to **Server 2 / Disk 4**.
+  * Pod writes Block 3 ➔ Streamed directly to **Server 3 / Disk 2**.
+  * Ceph RBD aggregates the network bandwidth and combined IOPS of the **entire storage cluster simultaneously**.
+
+---
+
+### 3. No Filesystem Metadata Overhead on the Storage Cluster
+
+* **NFS Server Overhead**:
+  The NFS server must constantly update directory trees, directory modification timestamps (`mtime`), link counts, and byte-range locks. When thousands of files exist in a directory, the NFS server's CPU spends most of its time parsing metadata structures instead of transferring raw data.
+* **Ceph Cluster Simplicity with RBD**:
+  The Ceph storage cluster **does not know what a file, directory, or folder is**. It only sees numbered byte objects (e.g., `rbd_data.4a8b.000000000001`).
+  * Inode allocation, directory traversal, and permission verification happen entirely in the **worker node's own CPU and RAM**.
+  * Ceph storage nodes (OSDs) only do one thing: store and replicate raw blocks to fast NVMe/SSD storage.
+
+---
+
+### 4. Safe Local Linux Page Caching
+
+Because Ceph RBD is an **exclusive block device** bound to one worker node at a time (`ReadWriteOnce`), the Linux kernel knows that **no other server can modify those blocks**:
+
+* **RBD**:
+  The worker node can safely use its full **Linux Page Cache (RAM)** to buffer reads and writes. Frequently read data stays in worker node memory and returns in nanoseconds without ever hitting the network.
+* **NFS**:
+  Because NFS assumes multiple clients might modify files at any time, NFS clients enforce strict cache consistency rules (such as `close-to-open` cache coherency and `actimeo` polling timers). Every time an application opens a file, NFS is forced to send network RPCs to check if the remote file has changed, destroying cache efficiency.
+
+---
+
+### 5. Multi-Queue Block I/O (`blk-mq`) and Deep Concurrency
+
+* Modern Linux uses `blk-mq` (Multi-Queue Block I/O), allowing thousands of concurrent I/O requests per CPU core with hardware queue depths of 64, 128, or 256. Ceph RBD plugs directly into `blk-mq`. Databases using asynchronous I/O (`io_uring` or `libaio`) can execute thousands of concurrent I/Os without stalling.
+* NFS historically processes requests sequentially or over limited RPC connection slots, causing severe serialization stalls under high concurrency.
+
+---
+
+### Performance Comparison: Ceph RBD vs. Traditional NFS
+
+| Metric | Traditional NFS | Ceph RBD (`ocs-ceph-rbd`) | Why RBD Wins |
+| :--- | :--- | :--- | :--- |
+| **I/O Protocol Level** | File (VFS over RPC) | Block (Raw block driver) | Zero file-level RPC handshakes |
+| **RPCs Per Write** | 4 to 8 network RPCs | **1 network RPC** | Eliminates network round-trips |
+| **Network Throughput Target** | Single NFS server IP | **Entire Ceph cluster fabric** | No single NIC bottleneck |
+| **Metadata Processing** | Remote NFS host CPU | **Local worker node RAM** | Bypasses remote metadata serialization |
+| **Random 4K Write IOPS** | Low (~1,500 – 5,000 IOPS) | **High (20,000 – 100,000+ IOPS)** | Native NVMe striping across cluster |
+| **fsync / WAL Latency** | High (5 ms – 25 ms) | **Ultra-Low (0.5 ms – 1.8 ms)** | Immediate replica commit |
+| **Best Used For** | Shared configs, shared CMS assets | **Databases (PostgreSQL, MySQL, Kafka)** | Sub-millisecond transactional performance |
+
+---
+
 ## CephFS vs. NFS: Are They the Same? What is the Difference?
 
 To an application running inside an OpenShift container, **CephFS and NFS feel almost identical**:
@@ -1374,3 +1567,1286 @@ To an application running inside an OpenShift container, **CephFS and NFS feel a
 | **High Availability** | Active-Passive failover | Active-Active self-healing RADOS |
 | **Single Point of Failure** | Yes (unless complex HA pair) | None (fully distributed) |
 | **OpenShift Management** | External / Manual | Native OpenShift Operator (ODF) |
+
+---
+
+## 13. Allowing Users to Download Files from a CephFS PVC
+
+A frequent real-world requirement: **"I have an application writing reports, data exports, logs, or user-uploaded media to a CephFS PVC in OpenShift. How do I allow people (end-users, business teams, external partners, or developers) to browse and download these files?"**
+
+---
+
+### The Superpower of CephFS: Concurrent Multi-Pod Access
+
+Because CephFS is **`ReadWriteMany` (RWX)**, you do **NOT** need to disrupt or modify your existing backend application pods.
+
+* Your backend producer pods can continue writing to the PVC in `readWrite` mode.
+* You can deploy a dedicated **file-serving gateway pod** (Web UI, HTTP server, or SFTP) that mounts the **exact same PVC at the same time**.
+* To guarantee complete safety, the download gateway pod mounts the CephFS volume with **`readOnly: true`**, making it physically impossible for downloaders to accidentally delete or corrupt backend data.
+
+```text
+                                 ┌─────────────────────────────────┐
+                                 │    CephFS Storage Volume (RWX)  │
+                                 │      (ocs-storagecluster-cephfs) │
+                                 └────────────────┬────────────────┘
+                                                  │
+                         ┌────────────────────────┴────────────────────────┐
+                         │                                                 │
+                         ▼                                                 ▼
+          ┌─────────────────────────────┐                   ┌─────────────────────────────┐
+          │     Backend Producer Pod    │                   │   Download Gateway Pod(s)   │
+          │   Mount: /var/data (ReadWrite)│                  │ Mount: /srv/data (ReadOnly) │
+          └─────────────────────────────┘                   └──────────────┬──────────────┘
+                         ▲                                                 │
+                         │ Writes live files                               ▼
+                 [Application Logic]                     ┌───────────────────────────────────┐
+                                                         │     OpenShift Route / Ingress     │
+                                                         │   (HTTPS edge-terminated URL)     │
+                                                         └─────────────────┬─────────────────┘
+                                                                           │
+                                                                           ▼
+                                                                  [End Users / Clients]
+                                                                (Web Browser, Curl, SFTP)
+```
+
+Depending on who needs to download the files and how they work, choose one of the four battle-tested methods below:
+
+---
+
+### Method 1: Web Browser Download Portal via FileBrowser (Recommended for End-Users)
+
+If end-users, analysts, or non-technical stakeholders need to download files, providing a **Web UI** is the best experience. Users simply open an HTTPS URL in their browser, log in, browse folders, and click "Download".
+
+**FileBrowser** is a lightweight, zero-dependency web-based file manager that runs inside a tiny container (~30MB RAM).
+
+#### Key Features of FileBrowser
+
+* Intuitive web file explorer (folders, file size, timestamps).
+* One-click file downloads or multi-file ZIP downloads.
+* Built-in previews for PDFs, text files, markdown, and images.
+* Multi-user authentication with customizable read-only accounts.
+* Search bar to locate files quickly across large directory trees.
+
+#### Complete OpenShift Manifest: FileBrowser on CephFS
+
+Save the following as `cephfs-filebrowser.yaml` and apply it to your project:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cephfs-filebrowser
+  namespace: my-project
+  labels:
+    app: cephfs-filebrowser
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cephfs-filebrowser
+  template:
+    metadata:
+      labels:
+        app: cephfs-filebrowser
+    spec:
+      containers:
+        - name: filebrowser
+          image: docker.io/filebrowser/filebrowser:v2-s6
+          imagePullPolicy: IfNotPresent
+          env:
+            # Tell FileBrowser where to store its internal user database
+            - name: FB_DATABASE
+              value: /tmp/filebrowser.db
+            - name: FB_ROOT
+              value: /srv/data
+            - name: FB_PORT
+              value: "8080"
+            - name: FB_NOAUTH
+              value: "false" # Set to "true" if you want public access without login
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            # Mount your existing CephFS PVC
+            - name: cephfs-data
+              mountPath: /srv/data
+              readOnly: true # Prevents web users from deleting/modifying files!
+      volumes:
+        - name: cephfs-data
+          persistentVolumeClaim:
+            claimName: <your-cephfs-pvc-name>
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cephfs-filebrowser-svc
+  namespace: my-project
+spec:
+  selector:
+    app: cephfs-filebrowser
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: cephfs-filebrowser
+  namespace: my-project
+spec:
+  to:
+    kind: Service
+    name: cephfs-filebrowser-svc
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+```
+
+#### How Users Access and Download
+
+1. Deploy the manifest:
+
+   ```bash
+   oc apply -f cephfs-filebrowser.yaml -n my-project
+   ```
+
+2. Retrieve the public HTTPS URL from OpenShift:
+
+   ```bash
+   oc get route cephfs-filebrowser -n my-project -o jsonpath='{"https://"}{.spec.host}{"\n"}'
+   ```
+
+3. Open the URL in any web browser.
+4. Log in with the default credentials:
+   * **Username**: `admin`
+   * **Password**: `admin`
+   *(Immediately navigate to **Settings ➔ User Management** to change the password or create read-only accounts).*
+5. Users can browse the directory tree, click any file to download, or select multiple files and click **Download as ZIP**.
+
+---
+
+### Method 2: High-Speed HTTP Directory Index via Nginx (Fastest for Direct File Links)
+
+If you need a lightweight, high-performance, and completely maintenance-free solution where users or automated scripts can download files via direct links (e.g. `https://downloads.example.com/reports/2026-data.csv` or `curl -O`), use an **Nginx autoindex file server**.
+
+#### Key Features of Nginx Autoindex
+
+* Extreme performance: streams large gigabyte files directly from CephFS via Linux `sendfile`.
+* Zero user management required.
+* Native browser directory listing.
+* Works seamlessly with `wget`, `curl`, and automated download scripts.
+
+#### Complete OpenShift Manifest: Nginx Autoindex on CephFS
+
+Save as `cephfs-nginx-downloader.yaml`:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-downloader-config
+  namespace: my-project
+data:
+  default.conf: |
+    server {
+        listen 8080;
+        server_name localhost;
+
+        location / {
+            root /usr/share/nginx/html;
+            autoindex on;               # Enables directory browsing!
+            autoindex_exact_size off;   # Displays human-readable file sizes (MB/GB)
+            autoindex_localtime on;    # Displays local timestamps
+            charset utf-8;
+
+            # Optimize for high-throughput file downloads
+            sendfile on;
+            sendfile_max_chunk 1m;
+            tcp_nopush on;
+            tcp_nodelay on;
+            keepalive_timeout 65;
+        }
+
+        # Health probe endpoint
+        location /healthz {
+            return 200 'OK';
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cephfs-nginx-downloader
+  namespace: my-project
+spec:
+  replicas: 2 # Scale horizontally for high-traffic download spikes!
+  selector:
+    matchLabels:
+      app: cephfs-nginx-downloader
+  template:
+    metadata:
+      labels:
+        app: cephfs-nginx-downloader
+    spec:
+      containers:
+        - name: nginx
+          image: registry.access.redhat.com/ubi9/nginx-122
+          ports:
+            - containerPort: 8080
+              name: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+            - name: cephfs-storage
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+      volumes:
+        - name: nginx-conf
+          configMap:
+            name: nginx-downloader-config
+        - name: cephfs-storage
+          persistentVolumeClaim:
+            claimName: <your-cephfs-pvc-name>
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cephfs-nginx-downloader-svc
+  namespace: my-project
+spec:
+  selector:
+    app: cephfs-nginx-downloader
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: cephfs-downloads
+  namespace: my-project
+spec:
+  to:
+    kind: Service
+    name: cephfs-nginx-downloader-svc
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+```
+
+#### How Users Download
+
+1. Deploy the manifest:
+
+   ```bash
+   oc apply -f cephfs-nginx-downloader.yaml -n my-project
+   ```
+
+2. Get the download URL:
+
+   ```bash
+   oc get route cephfs-downloads -n my-project -o jsonpath='{"https://"}{.spec.host}{"\n"}'
+   ```
+
+3. Users can browse the directory tree in their browser, or scripts can download directly:
+
+   ```bash
+   # Download a file via curl
+   curl -O https://cephfs-downloads-my-project.apps.cluster.com/exports/daily-report.csv
+
+   # Download an entire directory recursively using wget
+   wget -r -np -nH --cut-dirs=1 https://cephfs-downloads-my-project.apps.cluster.com/exports/
+   ```
+
+---
+
+### Method 3: In-Cluster SFTP Gateway (For WinSCP, FileZilla, and Batch Jobs)
+
+If users need to download files using desktop graphical file transfer clients (like **WinSCP**, **FileZilla**, or **Cyberduck**), or if external enterprise systems pull files via automated SFTP/SCP scripts:
+
+#### Can WinSCP Connect Over an OpenShift Ingress / Route?
+
+**NO.** A standard OpenShift `Route` or Kubernetes `Ingress` **cannot** be used for WinSCP:
+
+* **Why Routes Fail for WinSCP**:
+  * WinSCP connects using the **SFTP protocol**, which runs over **raw SSH (Layer 4 TCP)**.
+  * OpenShift Ingress (`Route`) is a **Layer 7 HTTP/HTTPS reverse proxy** (HAProxy).
+  * An OpenShift Route listens on ports 80 and 443 and requires HTTP `Host` headers or TLS SNI (Server Name Indication) to determine which service to send traffic to.
+  * Standard SSH/SFTP does **not** send TLS SNI hostnames or HTTP headers. If WinSCP tries to connect to an OpenShift Route on port 443, the router drops the connection because the SSH handshake is invalid HTTP/TLS.
+
+---
+
+#### The 3 Ways to Connect WinSCP to OpenShift CephFS
+
+##### Option A: Service Type `NodePort` (On-Premises / Bare Metal)
+
+OpenShift opens a static high port (in the range 30000–32767) on **every worker node** in the cluster.
+
+1. **Service Manifest (`sftp-nodeport.yaml`)**:
+
+   ```yaml
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: cephfs-sftp-nodeport
+     namespace: my-project
+   spec:
+     type: NodePort
+     selector:
+       app: cephfs-sftp
+     ports:
+       - name: sftp
+         port: 22
+         targetPort: 22
+         nodePort: 32222 # Choose a port between 30000-32767
+   ```
+
+2. **WinSCP Connection Settings**:
+   * **File protocol**: `SFTP`
+   * **Host name**: `<Any-OpenShift-Worker-Node-IP>` (e.g., `192.168.1.50`)
+   * **Port number**: `32222` *(Must change from default 22 to your NodePort)*
+   * **User name**: `downloader`
+   * **Password**: `YourPassword` (or load private `.ppk` key in **Advanced ➔ SSH ➔ Authentication**)
+
+---
+
+##### Option B: Service Type `LoadBalancer` (Cloud or On-Prem with MetalLB)
+
+A dedicated, routable external IP is assigned directly to the SFTP service, enabling standard port 22 access.
+
+1. **Service Manifest (`sftp-loadbalancer.yaml`)**:
+
+   ```yaml
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: cephfs-sftp-lb
+     namespace: my-project
+   spec:
+     type: LoadBalancer
+     selector:
+       app: cephfs-sftp
+     ports:
+       - name: sftp
+         port: 22
+         targetPort: 22
+   ```
+
+2. **WinSCP Connection Settings**:
+   * **File protocol**: `SFTP`
+   * **Host name**: `<LoadBalancer-External-IP-or-DNS>` (e.g., `sftp.company.com` or `10.200.5.15`)
+   * **Port number**: `22` *(Standard default port)*
+   * **User name**: `downloader`
+   * **Password**: `YourPassword`
+
+---
+
+##### Option C: Developer / Admin Port-Forwarding (Zero Cluster Network Changes)
+
+If corporate firewalls block external ports (32222 or 22), developers and administrators can tunnel WinSCP through the OpenShift API using `oc port-forward`:
+
+1. **Start the Port-Forward Tunnel**:
+
+   ```bash
+   oc port-forward pod/<sftp-pod-name> 2222:22 -n my-project
+   ```
+
+2. **WinSCP Connection Settings**:
+   * **File protocol**: `SFTP`
+   * **Host name**: `127.0.0.1` (or `localhost`)
+   * **Port number**: `2222`
+   * **User name**: `downloader`
+   * **Password**: `YourPassword`
+
+* **Advantage**: Fully encrypted through OpenShift's TLS API; requires no firewall tickets or external IPs.
+
+---
+
+#### Read-Only Safety for WinSCP Downloaders
+
+To prevent WinSCP users from accidentally deleting or overwriting files on the shared CephFS PVC:
+
+* In the SFTP Gateway Secret, configure the user with `:ro`:
+
+  ```yaml
+  # format: user:password[:[uid]:[gid]:[dir]:ro]
+  SFTP_USERS: "downloader:SecurePass123:::files:ro"
+  ```
+
+* Any attempt in WinSCP to delete, rename, or upload a file will result in `Permission denied`.
+
+---
+
+#### What If You MUST Use OpenShift Ingress / Port 443 with WinSCP? (The WebDAV Solution)
+
+If your enterprise strictly forbids opening `NodePort` (30000–32767) and does NOT have a `LoadBalancer` service, meaning **all traffic MUST enter through standard OpenShift Ingress / Routes on Port 443 (HTTPS)**:
+
+You can still use **WinSCP**!
+
+WinSCP is not only an SFTP client; it natively supports the **WebDAV protocol**. Because WebDAV is an extension of HTTP/HTTPS, it routes **100% natively through standard OpenShift Routes on port 443**.
+
+##### 1. Deploy WebDAV on CephFS (`cephfs-webdav.yaml`)
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cephfs-webdav
+  namespace: my-project
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cephfs-webdav
+  template:
+    metadata:
+      labels:
+        app: cephfs-webdav
+    spec:
+      containers:
+        - name: webdav
+          image: docker.io/bytemark/webdav:latest
+          env:
+            - name: AUTH_TYPE
+              value: "Basic"
+            - name: USERNAME
+              value: "downloader"
+            - name: PASSWORD
+              value: "SecurePass123"
+            - name: READONLY
+              value: "true" # Enforces download-only access!
+          ports:
+            - containerPort: 80
+              name: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: cephfs-data
+              mountPath: /var/lib/dav/data
+              readOnly: true
+      volumes:
+        - name: cephfs-data
+          persistentVolumeClaim:
+            claimName: <your-cephfs-pvc-name>
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cephfs-webdav-svc
+  namespace: my-project
+spec:
+  selector:
+    app: cephfs-webdav
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: cephfs-webdav
+  namespace: my-project
+spec:
+  to:
+    kind: Service
+    name: cephfs-webdav-svc
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+```
+
+##### 2. Connect WinSCP via OpenShift Route (Port 443)
+
+In the WinSCP login window:
+
+1. **File protocol**: Select **`WebDAV`** from the dropdown (instead of SFTP).
+2. **Encryption**: Select **`TLS/SSL Implicit encryption`**.
+3. **Host name**: Enter the OpenShift Route hostname (e.g., `cephfs-webdav-my-project.apps.mycluster.com`).
+4. **Port number**: `443`.
+5. **User name**: `downloader`.
+6. **Password**: `SecurePass123`.
+
+* **Result**: Users get the exact same WinSCP dual-pane file explorer experience, transferring files through your corporate OpenShift Route on standard HTTPS, with **zero LoadBalancer and zero NodePort required**.
+
+---
+
+### Method 4: Developer & Admin CLI Downloads (No New Pods Needed)
+
+If the person who needs to download files is a developer, DevOps engineer, or administrator with `oc` cluster credentials, you do **not** need to deploy any Web UI or SFTP server. Use native OpenShift CLI tools against an existing pod that already has the CephFS PVC mounted:
+
+#### A. Download an Entire Folder via `oc rsync` (Fastest for Directories)
+
+```bash
+# Sync remote directory from pod to local folder
+oc rsync <pod-name>:/path/to/cephfs/mount/ ./local-download-folder/ -n my-project
+
+# Exclude unwanted files or logs
+oc rsync <pod-name>:/path/to/cephfs/mount/ ./local-download-folder/ --exclude="*.tmp" -n my-project
+```
+
+#### B. Download a Single File via `oc cp`
+
+```bash
+# Copy single file from pod to local machine
+oc cp <pod-name>:/path/to/cephfs/mount/report.pdf ./report.pdf -n my-project
+```
+
+#### C. Stream Directly via `oc exec` Pipeline
+
+```bash
+# Stream and extract a compressed archive on the fly
+oc exec <pod-name> -n my-project -- tar -czf - -C /path/to/cephfs/mount my-folder | tar -xzf -
+```
+
+#### D. Ad-Hoc 5-Minute Download via Ephemeral Python Server
+
+If you need to download a large dataset quickly to your workstation without deploying permanent Routes:
+
+```bash
+# 1. Start an ephemeral debug pod mounting the CephFS PVC
+oc run cephfs-downloader --rm -it \
+  --image=registry.access.redhat.com/ubi9/ubi \
+  --restart=Never \
+  --overrides='{
+    "spec": {
+      "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "<your-cephfs-pvc>"}}],
+      "containers": [{
+        "name": "downloader",
+        "image": "registry.access.redhat.com/ubi9/python-39",
+        "command": ["python3", "-m", "http.server", "8080", "--directory", "/mnt/data"],
+        "volumeMounts": [{"name": "data", "mountPath": "/mnt/data", "readOnly": true}]
+      }]
+    }
+  }' -n my-project
+
+# 2. In another terminal, port-forward to your laptop:
+oc port-forward pod/cephfs-downloader 8080:8080 -n my-project
+
+# 3. Open http://localhost:8080 in your browser and download whatever you need!
+```
+
+---
+
+### Security Best Practices for CephFS File Downloads
+
+1. **Always Set `readOnly: true` on Download Pods**:
+   In the download pod's `volumeMounts`, always set `readOnly: true`. Because CephFS supports multi-client mounting, this isolates the download interface from write permissions. Even if the download pod or web portal is compromised, your actual persistent data cannot be wiped or altered.
+2. **Protect Web Portals with OpenShift OAuth Proxy**:
+   If the files contain sensitive company data, do not expose a public unauthenticated route. Wrap the FileBrowser or Nginx service with the **OpenShift OAuth Proxy sidecar** (`registry.redhat.io/openshift4/ose-oauth-proxy`). This forces all web visitors to log in with their corporate OpenShift / Single Sign-On (SSO) credentials before gaining access to the files.
+3. **NetworkPolicy Isolation**:
+   If using the SFTP Gateway method, apply an OpenShift `NetworkPolicy` to ensure the gateway pod can only communicate with the storage network and authorized client CIDRs, blocking it from accessing internal database or control-plane services.
+
+---
+
+### Decision Matrix: Which Download Method Should You Use?
+
+#### Audience & User Experience Matrix
+
+| Requirement / Audience | Recommended Solution | Setup Complexity | User Experience |
+| :--- | :--- | :---: | :--- |
+| **Non-Technical End Users / Business Teams** | **Method 1: FileBrowser** | Low (Single YAML) | ⭐⭐⭐⭐⭐ Rich Web UI, previews, zip download |
+| **Public Downloads / Automated `curl` / `wget`** | **Method 2: Nginx Autoindex** | Low (Single YAML) | ⭐⭐⭐⭐ Direct URLs, highest download throughput |
+| **WinSCP on Corporate Networks (Port 443 Only)** | **WebDAV Gateway** | Low (Single YAML) | ⭐⭐⭐⭐ Native WinSCP over HTTPS, no custom ports |
+| **Desktop FTP Clients (FileZilla / WinSCP) / Partners** | **Method 3: In-Cluster SFTP** | Medium (Secret + Service) | ⭐⭐⭐⭐ Traditional SFTP drag-and-drop |
+| **Developers / Admins with `oc` CLI Access** | **Method 4: `oc rsync` / `oc cp`** | Zero (Built-in CLI) | ⭐⭐⭐ Fast terminal commands, no manifests |
+
+---
+
+#### Network Exposure & Protocol Comparison
+
+| Method | Client Protocol | Exposure Type | Needs LoadBalancer? | Works Over Ingress (Port 443)? | Ideal Use Case |
+| :--- | :--- | :--- | :---: | :---: | :--- |
+| **FileBrowser** | HTTPS | OpenShift Route | ❌ No | ✅ **Yes** | Business users, teams, document sharing |
+| **Nginx Autoindex** | HTTPS | OpenShift Route | ❌ No | ✅ **Yes** | Public downloads, CI/CD, script automation |
+| **WebDAV Gateway** | WebDAV (HTTPS) | OpenShift Route | ❌ No | ✅ **Yes** | WinSCP users restricted to Port 443 |
+| **SFTP (NodePort)** | SFTP / SSH | NodePort (`32222`) | ❌ **No** | ❌ No | On-premises bare metal without cloud LB |
+| **SFTP (LoadBalancer)** | SFTP / SSH | LoadBalancer (`22`) | ✅ Yes | ❌ No | Cloud clusters (AWS/Azure/GCP) or MetalLB |
+| **SFTP (Port-Forward)** | SFTP / SSH | `oc port-forward` (`2222`) | ❌ **No** | ❌ No | Developer laptop, ad-hoc secure debugging |
+| **oc rsync / oc cp** | OpenShift API | Native CLI | ❌ **No** | ❌ No | Developers/DevOps with cluster access |
+
+---
+
+## 14. Modern Object Storage Gateway: Using RustFS with OpenShift PVCs
+
+A modern, cloud-native alternative to traditional file-sharing protocols (SFTP, NFS, and WebDAV) is deploying an **S3-compatible Object Storage Gateway** directly on top of your OpenShift storage.
+
+**RustFS** (<https://github.com/rustfs/rustfs>) has emerged as an open-source, high-performance distributed object storage engine written in **Rust**. It serves as a modern, memory-safe, and permissively licensed alternative to legacy object gateways like MinIO and Ceph RGW.
+
+---
+
+### Why RustFS for This Use Case?
+
+When users ask: *"How do I let people download files from an OpenShift PVC without wrestling with SFTP ports or complex load balancers?"*, RustFS provides an elegant answer:
+
+1. **WinSCP Connects Natively via OpenShift Ingress (Port 443)**:
+   WinSCP includes built-in support for the **Amazon S3 protocol**. Because S3 is pure HTTP/HTTPS, you can expose RustFS through a standard OpenShift **Route** on port 443. WinSCP users can browse and download files over standard corporate HTTPS—**no LoadBalancer and no NodePort required**.
+2. **Built-in Web Console (Port 9001)**:
+   RustFS includes an embedded web management console. By exposing it via an OpenShift Route, non-technical users can log in from Chrome or Firefox, browse buckets, preview files, and download data with one click.
+3. **Pre-Signed Download URLs**:
+   Backend applications can generate temporary, signed HTTPS download links (e.g., valid for 60 minutes). Users can download files directly from any browser or email link without needing user accounts or credentials.
+4. **Apache 2.0 License (Enterprise Friendly)**:
+   While MinIO shifted to the restrictive GNU **AGPLv3** license (which triggers compliance and legal concerns for many enterprises), RustFS is released under the permissive **Apache 2.0** license.
+5. **Zero Garbage Collection & Ultra-Low Memory**:
+   Because it is written in Rust rather than Go or Java, RustFS has zero runtime garbage collection pauses, predictable sub-millisecond latency for small objects, and consumes approximately 1/5th the RAM of comparable storage daemons.
+
+---
+
+### Is RustFS a StorageClass or an Application? How Do You Actually Use It?
+
+A critical conceptual distinction in Kubernetes and OpenShift:
+
+> **RustFS is NOT a StorageClass.**  
+> It is an **Application Deployment** (a storage server software), exactly like **MinIO**, **PostgreSQL**, or **RabbitMQ**.
+
+---
+
+#### The Core Difference: StorageClass (POSIX) vs. RustFS (S3 API)
+
+* A **StorageClass** (`ocs-storagecluster-ceph-rbd`, `ocs-storagecluster-cephfs`, `nfs-client`) is a cluster-level Kubernetes infrastructure plugin backed by a **CSI Driver**. It allows pods to declare a `PersistentVolumeClaim` (PVC) and mount a directory (e.g. `/var/data`) directly into a container. Applications interact with it using standard Linux **POSIX file calls** (`open`, `read`, `write`, `close`, `mkdir`).
+* **RustFS** is a containerized **application server**. It runs *inside* your cluster as a `Deployment` or `StatefulSet`. It **consumes** existing StorageClasses (like Ceph RBD or CephFS) to persist its own data, and exposes an **HTTP/HTTPS S3 API endpoint** to the rest of the world.
+
+---
+
+#### How Would You Actually Use RustFS? (The 3 Usage Models)
+
+##### Model 1: Cloud-Native Applications (No Volume Mounts Required!)
+
+In modern microservice architectures, application pods **do not mount PVCs at all**. Mounting shared filesystems introduces file-locking bugs, slow pod startup times, and tight coupling to specific nodes.
+
+Instead, applications interact with RustFS over the internal network using standard AWS SDKs:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: invoice-generator
+  namespace: my-project
+spec:
+  replicas: 10 # Scale effortlessly from 1 to 100 replicas!
+  template:
+    spec:
+      containers:
+        - name: app
+          image: my-invoice-app:latest
+          env:
+            # Point app to in-cluster RustFS internal service
+            - name: AWS_ENDPOINT_URL
+              value: "http://rustfs-service.my-project.svc:9000"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: rustfs-credentials
+                  key: RUSTFS_ACCESS_KEY
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rustfs-credentials
+                  key: RUSTFS_SECRET_KEY
+          # NOTICE: NO volumeMounts or persistentVolumeClaims needed!
+```
+
+**Inside your application code (e.g. Python / Node.js / Java / Go)**:
+
+```python
+import boto3
+import os
+
+# Connect to internal RustFS
+s3 = boto3.client(
+    's3',
+    endpoint_url=os.environ['AWS_ENDPOINT_URL'],
+    aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+    aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY']
+)
+
+# Upload invoice directly from memory
+s3.put_object(Bucket='invoices', Key='inv-1001.pdf', Body=pdf_bytes)
+
+# Read file directly
+response = s3.get_object(Bucket='invoices', Key='inv-1001.pdf')
+data = response['Body'].read()
+```
+
+* **Why this is powerful**: Your application pods are **100% stateless**. They boot up in milliseconds, scale horizontally without POSIX lock contention, and can be scheduled on any worker node without storage affinity constraints.
+
+---
+
+##### Model 2: External Users & File Transfer Tools (WinSCP, Web Browser)
+
+* **WinSCP Users**: Connect using the **Amazon S3** protocol via the OpenShift Route on standard HTTPS (Port 443).
+* **Web Browser Users**: Navigate to the RustFS Web Console Route on standard HTTPS (Port 443) and click **Download**.
+* **External Clients**: Receive temporary pre-signed HTTP download URLs.
+
+---
+
+##### Model 3: Can You Create a PVC Based on RustFS? (The S3-CSI Approach)
+
+A frequent follow-up question: **"Can I create a `StorageClass` based on RustFS so applications can use a standard `PersistentVolumeClaim` (PVC) and mount it as a folder, rather than having to modify code to use S3 APIs?"**
+
+**YES, you can.**
+
+Kubernetes allows you to bridge any S3-compatible object storage (including RustFS) into a standard Kubernetes `StorageClass` and PVC using an **S3 Container Storage Interface (CSI) driver** (such as **`csi-s3`**).
+
+```text
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                           OpenShift Cluster                            │
+ │                                                                        │
+ │   ┌───────────────────────────┐        ┌───────────────────────────┐   │
+ │   │   Application Pod A       │        │   Application Pod B       │   │
+ │   │  Mount: /var/data (POSIX) │        │  Mount: /var/data (POSIX) │   │
+ │   └─────────────┬─────────────┘        └─────────────┬─────────────┘   │
+ │                 │                                    │                 │
+ │                 ▼                                    ▼                 │
+ │   ┌────────────────────────────────────────────────────────────────┐   │
+ │   │             PersistentVolumeClaim (RWX)                        │   │
+ │   │               storageClassName: rustfs-s3                      │   │
+ │   └───────────────────────────────┬────────────────────────────────┘   │
+ │                                   │                                    │
+ │                                   ▼                                    │
+ │   ┌────────────────────────────────────────────────────────────────┐   │
+ │   │                   CSI-S3 Driver (FUSE Engine)                  │   │
+ │   │   Translates POSIX read/write calls into S3 GET/PUT requests   │   │
+ │   └───────────────────────────────┬────────────────────────────────┘   │
+ │                                   │ Internal HTTP API                  │
+ │                                   ▼ (Port 9000)                        │
+ │   ┌────────────────────────────────────────────────────────────────┐   │
+ │   │                      RustFS Service / Pod                      │   │
+ │   └───────────────────────────────┬────────────────────────────────┘   │
+ │                                   │ Writes raw blocks                  │
+ │                                   ▼                                    │
+ │   ┌────────────────────────────────────────────────────────────────┐   │
+ │   │              Physical Storage Disk (Ceph RBD / SSD)            │   │
+ │   └────────────────────────────────────────────────────────────────┘   │
+ └────────────────────────────────────────────────────────────────────────┘
+```
+
+###### 1. Step 1: Create the CSI Secret with RustFS Endpoint
+
+Create a Secret containing the internal cluster endpoint of RustFS and your credentials:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: csi-rustfs-secret
+  namespace: kube-system
+type: Opaque
+stringData:
+  accessKeyID: "rustfsadmin"
+  secretAccessKey: "SuperSecureKey2026!"
+  endpoint: "http://rustfs-service.my-project.svc:9000"
+  region: "us-east-1"
+```
+
+###### 2. Step 2: Define the `StorageClass`
+
+The `StorageClass` tells the CSI driver how to mount RustFS buckets using a FUSE engine (`geesefs` or `s3fs`):
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: rustfs-s3
+provisioner: ru.yandex.s3.csi
+parameters:
+  mounter: geesefs # High-performance S3 FUSE mounter
+  csi.storage.k8s.io/provisioner-secret-name: csi-rustfs-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: kube-system
+  csi.storage.k8s.io/controller-publish-secret-name: csi-rustfs-secret
+  csi.storage.k8s.io/controller-publish-secret-namespace: kube-system
+  csi.storage.k8s.io/node-stage-secret-name: csi-rustfs-secret
+  csi.storage.k8s.io/node-stage-secret-namespace: kube-system
+  csi.storage.k8s.io/node-publish-secret-name: csi-rustfs-secret
+  csi.storage.k8s.io/node-publish-secret-namespace: kube-system
+```
+
+###### 3. Step 3: Request Storage via PVC
+
+Now, your workloads can request storage without knowing anything about S3 APIs:
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rustfs-pvc
+  namespace: my-project
+spec:
+  accessModes:
+    - ReadWriteMany # S3 provides RWX across all cluster nodes!
+  storageClassName: rustfs-s3
+  resources:
+    requests:
+      storage: 50Gi
+```
+
+###### 4. Step 4: Mount into Application Pod
+
+The application pod mounts the volume just like any traditional filesystem:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: legacy-app
+  namespace: my-project
+spec:
+  containers:
+    - name: app
+      image: registry.access.redhat.com/ubi9/ubi
+      command: ["sh", "-c", "echo 'hello from pod' >> /data/test.txt && sleep 3600"]
+      volumeMounts:
+        - name: shared-rustfs
+          mountPath: /data
+  volumes:
+    - name: shared-rustfs
+      persistentVolumeClaim:
+        claimName: rustfs-pvc
+```
+
+* **What happens**: The container writes to `/data/test.txt` as a standard local file. The `csi-s3` driver intercepts the call, wraps it in an S3 HTTP PUT request, and sends it to RustFS.
+* **Simultaneous External Access**: At the exact same second, an external user connecting via **WinSCP (Amazon S3 protocol)** or the **RustFS Web Console** can view and download `test.txt`!
+
+---
+
+###### Critical Trade-offs: Why Native CephFS is Usually Better for POSIX PVCs
+
+While creating a PVC backed by RustFS works, you must weigh the architectural realities of **emulated POSIX over Object Storage**:
+
+1. **Emulated POSIX vs. True Filesystem**:
+   * S3 has no concept of directories or byte offsets—only immutable object keys (`prefix/file.txt`).
+   * Renaming a folder in an S3 FUSE mount forces the driver to copy every single object under that prefix and delete the old ones.
+   * Appending data (`>>`) requires re-uploading the entire object payload.
+2. **File Locking (`fcntl` / `flock`)**:
+   * FUSE S3 drivers cannot reliably support strict POSIX file locks. Databases (PostgreSQL, SQLite, MySQL) will crash or corrupt data if run over an S3-backed PVC.
+3. **OpenShift Security Context Constraints (SCC)**:
+   * FUSE drivers require access to the Linux kernel device `/dev/fuse`. In OpenShift, this requires running with elevated permissions (a custom SCC with `allowHostDirVolumePlugin` or `privileged`).
+4. **Latency Overhead**:
+   * Every file write passes through Linux VFS ➔ FUSE daemon ➔ HTTP serialization ➔ RustFS ➔ Physical disk. Native CephFS kernel mounts are dramatically faster for POSIX workloads.
+
+---
+
+###### Architectural Verdict
+
+* **If your application needs POSIX volume mounts (`/var/data`)**:  
+  Use native OpenShift **CephFS (`ocs-storagecluster-cephfs`)**. It is built into OpenShift, fully supported by Red Hat, kernel-accelerated, and 100% POSIX compliant.
+* **If your goal is S3 APIs, WinSCP over port 443, and browser downloads**:  
+  Deploy **RustFS directly as an application gateway** on top of your CephFS PVC. This gives you the speed of CephFS for your apps, while giving users WinSCP and Web Console access over HTTPS!
+
+---
+
+#### Comparison Table: StorageClass vs. RustFS
+
+| Feature | Kubernetes StorageClass (e.g., CephFS / RBD) | RustFS (Object Storage Gateway) |
+| :--- | :--- | :--- |
+| **What is it?** | Infrastructure CSI driver for disk/volume provisioning | Application container serving an S3 API |
+| **How Pods Connect** | Container volume mount (`volumeMounts: /data`) | Network HTTP/HTTPS API (`http://service:9000`) |
+| **API Protocol** | POSIX system calls (`open`, `read`, `write`) | AWS S3 REST API (`GET`, `PUT`, `DELETE`) |
+| **Pod Architecture** | Stateful (tied to volume mount & node CSI) | **Stateless** (scale from 1 to 50 pods instantly) |
+| **File Locking** | Prone to POSIX locking conflicts across multiple pods | **Lock-free** atomic object versioning |
+| **WinSCP Access** | Requires NodePort / LoadBalancer for SFTP | **Native Amazon S3 via OpenShift Route (Port 443)** |
+| **Browser Access** | Requires separate gateway (FileBrowser / Nginx) | **Built-in Web Console & Pre-signed URLs** |
+
+---
+
+### Is This Available Out-of-the-Box in OpenShift? (Native ODF vs. Third-Party)
+
+A critical practical question: **"Are RustFS and S3-CSI built into OpenShift by default, or do they require custom setup?"**
+
+Here is the exact support and availability breakdown:
+
+---
+
+#### 1. What is NOT Built-In (Third-Party / Custom Setup Required)
+
+* **`csi-s3` (S3 CSI Driver)**:
+  * ❌ **Not built-in**. Red Hat does not ship an S3-based CSI driver with OpenShift.
+  * To use `csi-s3`, cluster administrators must manually install third-party Helm charts and grant elevated permissions (`/dev/fuse` device access) via a custom Security Context Constraint (SCC).
+* **RustFS**:
+  * ❌ **Not built-in**. RustFS is an open-source project from the community.
+  * However, **running RustFS is simple**: because it is a standard container image (`docker.io/rustfs/rustfs`), you can deploy it in 30 seconds into any OpenShift project without cluster-admin permissions using the Deployment manifest provided in [Mode 1](#mode-1-standalone-rustfs-gateway-on-an-existing-pvc).
+
+---
+
+#### 2. What IS Built-In to OpenShift Out-of-the-Box (Red Hat Supported)
+
+If your cluster has **OpenShift Data Foundation (ODF)** installed, you already have enterprise-grade, supported solutions for both POSIX file storage and S3 object storage:
+
+| Storage Type | Native OpenShift (ODF) Solution | How Applications Use It |
+| :--- | :--- | :--- |
+| **Shared POSIX Filesystem (RWX)** | **CephFS (`ocs-storagecluster-cephfs`)** | Standard `PersistentVolumeClaim` (PVC) |
+| **High-Performance Block (RWO)** | **Ceph RBD (`ocs-storagecluster-ceph-rbd`)** | Standard `PersistentVolumeClaim` (PVC) |
+| **Native S3 Object Storage** | **NooBaa / Multicloud Object Gateway (MCG)** | **`ObjectBucketClaim` (OBC)** |
+
+---
+
+#### The Red Hat Native S3 Approach: `ObjectBucketClaim` (OBC)
+
+If you want official, out-of-the-box S3 object storage without installing RustFS or third-party CSI drivers, OpenShift provides **`ObjectBucketClaim` (OBC)**:
+
+```yaml
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: my-app-bucket
+  namespace: my-project
+spec:
+  # Native ODF Object StorageClass
+  storageClassName: openshift-storage.noobaa.io
+  generateBucketName: company-reports
+```
+
+1. **What OpenShift Does Automatically**:
+   * Creates an S3 bucket in the cluster's internal NooBaa / Ceph RGW object store.
+   * Generates a **ConfigMap** (`my-app-bucket`) containing the internal S3 endpoint URL and bucket name.
+   * Generates a **Secret** (`my-app-bucket`) containing the generated `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+2. **WinSCP & Browser Access with Native ODF**:
+   * ODF creates a public HTTPS Route on port 443 (e.g., `s3-openshift-storage.apps.mycluster.com`).
+   * WinSCP can connect directly using the **Amazon S3 protocol** over port 443 with the credentials from the OBC Secret—exactly like RustFS!
+
+---
+
+#### Decision Guide: Native ODF vs. RustFS Gateway
+
+* **Use Native OpenShift ODF (CephFS + NooBaa OBC)** when:
+  * You require full enterprise Red Hat commercial support and SLA.
+  * You already have ODF installed and want zero third-party software.
+* **Use RustFS as an In-Cluster Gateway** when:
+  * You already have an existing CephFS or Ceph RBD volume with files, and you simply need a lightweight, memory-efficient S3 translation layer so people can use **WinSCP or the Web Console over Port 443**.
+  * Your cluster does not have NooBaa / ODF Object Storage enabled, and you want an instant, Apache 2.0 S3 server running in your namespace without asking cluster admins for licenses.
+
+---
+
+### RustFS Architecture on OpenShift Storage
+
+RustFS can be deployed directly inside OpenShift in two primary patterns:
+
+```text
+  ┌────────────────────────────────────────────────────────────────────────┐
+  │                           OpenShift Cluster                            │
+  │                                                                        │
+  │   ┌───────────────────────────┐       ┌───────────────────────────┐    │
+  │   │   CephFS Shared PVC       │  OR   │   Ceph RBD Block PVC      │    │
+  │   │  (ocs-storagecluster-     │       │  (ocs-storagecluster-     │    │
+  │   │   cephfs / RWX)           │       │   ceph-rbd / RWO)         │    │
+  │   └─────────────┬─────────────┘       └─────────────┬─────────────┘    │
+  │                 │                                   │                  │
+  │                 └─────────────────┬─────────────────┘                  │
+  │                                   ▼ Mounts to /data                    │
+  │                   ┌───────────────────────────────┐                    │
+  │                   │         RustFS Pod            │                    │
+  │                   │                               │                    │
+  │                   │  - Port 9000: S3 API Engine   │                    │
+  │                   │  - Port 9001: Web UI Console  │                    │
+  │                   └───────┬───────────────┬───────┘                    │
+  │                           │               │                            │
+  │               Port 9000   ▼               ▼   Port 9001                │
+  │   ┌──────────────────────────┐         ┌──────────────────────────┐    │
+  │   │   Route: rustfs-s3       │         │  Route: rustfs-console   │    │
+  │   │ (HTTPS Edge Port 443)    │         │ (HTTPS Edge Port 443)    │    │
+  │   └─────────────┬────────────┘         └────────────┬─────────────┘    │
+  └─────────────────┼───────────────────────────────────┼──────────────────┘
+                    │                                   │
+                    ▼                                   ▼
+        [WinSCP via Amazon S3]                 [Web Browser Users]
+        [AWS CLI / SDKs / Boto3]               (One-Click File Downloads)
+```
+
+---
+
+### Mode 1: Standalone RustFS Gateway on an Existing PVC
+
+In this architecture, RustFS acts as an S3 frontend sitting on top of your existing CephFS or Ceph RBD PVC. All objects written via S3 are stored directly in your OpenShift persistent volume.
+
+#### Complete OpenShift Manifest (`rustfs-gateway.yaml`)
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rustfs-credentials
+  namespace: my-project
+type: Opaque
+stringData:
+  # Configure strong S3 credentials
+  RUSTFS_ACCESS_KEY: "rustfsadmin"
+  RUSTFS_SECRET_KEY: "SuperSecureKey2026!"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rustfs-gateway
+  namespace: my-project
+  labels:
+    app: rustfs
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: rustfs
+  template:
+    metadata:
+      labels:
+        app: rustfs
+    spec:
+      containers:
+        - name: rustfs
+          image: docker.io/rustfs/rustfs:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: rustfs-credentials
+          env:
+            # S3 API listener
+            - name: RUSTFS_ADDRESS
+              value: ":9000"
+            # Embedded Web Console listener
+            - name: RUSTFS_CONSOLE_ADDRESS
+              value: ":9001"
+          ports:
+            - name: s3-api
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            # Mount your existing CephFS or Ceph RBD volume
+            - name: storage-data
+              mountPath: /data
+      volumes:
+        - name: storage-data
+          persistentVolumeClaim:
+            claimName: <your-existing-pvc-name>
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustfs-service
+  namespace: my-project
+spec:
+  selector:
+    app: rustfs
+  ports:
+    - name: s3-api
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
+---
+# Route 1: Expose S3 API for WinSCP, AWS CLI, and SDKs
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: rustfs-s3
+  namespace: my-project
+spec:
+  to:
+    kind: Service
+    name: rustfs-service
+  port:
+    targetPort: s3-api
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+# Route 2: Expose Web Console for End-User Browser Downloads
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: rustfs-console
+  namespace: my-project
+spec:
+  to:
+    kind: Service
+    name: rustfs-service
+  port:
+    targetPort: console
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+```
+
+---
+
+### How to Access & Download Files via RustFS
+
+#### 1. WinSCP via Native Amazon S3 Protocol (100% via Ingress Port 443)
+
+WinSCP natively connects to any S3-compatible storage endpoint without third-party plugins.
+
+1. Retrieve your S3 API Route URL:
+
+   ```bash
+   oc get route rustfs-s3 -n my-project -o jsonpath='{.spec.host}{"\n"}'
+   # Example: rustfs-s3-my-project.apps.mycluster.com
+   ```
+
+2. Open WinSCP and configure the login dialog:
+   * **File protocol**: Select **`Amazon S3`** from the dropdown menu.
+   * **Host name**: Enter the Route hostname (e.g., `rustfs-s3-my-project.apps.mycluster.com`).
+   * **Port number**: `443` *(Standard HTTPS port)*.
+   * **Access key ID**: `rustfsadmin` (from Secret).
+   * **Secret key**: `SuperSecureKey2026!` (from Secret).
+
+3. Click **Login**.
+   * WinSCP connects over standard port 443 HTTPS.
+   * Users can browse buckets and drag-and-drop files to download or upload, identical to SFTP.
+
+---
+
+#### 2. Web Browser Downloads via RustFS Console
+
+For users who do not have WinSCP installed:
+
+1. Retrieve the Console Route URL:
+
+   ```bash
+   oc get route rustfs-console -n my-project -o jsonpath='{"https://"}{.spec.host}{"\n"}'
+   ```
+
+2. Open the URL in Google Chrome, Firefox, or Edge.
+3. Log in with your `RUSTFS_ACCESS_KEY` and `RUSTFS_SECRET_KEY`.
+4. Browse buckets, view object metadata, and click **Download** on any file.
+
+---
+
+#### 3. Programmatic Pre-Signed URLs (Time-Limited Direct Links)
+
+Applications running in OpenShift can generate secure, temporary download URLs so external clients can download files using a web browser without needing credentials:
+
+```python
+import boto3
+from botocore.config import Config
+
+# Initialize S3 client pointing to in-cluster RustFS
+s3_client = boto3.client(
+    's3',
+    endpoint_url='http://rustfs-service.my-project.svc:9000',
+    aws_access_key_id='rustfsadmin',
+    aws_secret_access_key='SuperSecureKey2026!',
+    config=Config(signature_version='s3v4')
+)
+
+# Generate a pre-signed GET URL valid for 1 hour (3600 seconds)
+download_url = s3_client.generate_presigned_url(
+    'get_object',
+    Params={'Bucket': 'reports', 'Key': 'monthly-export-2026.csv'},
+    ExpiresIn=3600
+)
+
+# Replace internal service hostname with public Route hostname
+public_url = download_url.replace(
+    'http://rustfs-service.my-project.svc:9000',
+    'https://rustfs-s3-my-project.apps.mycluster.com'
+)
+
+print(f"Share this link with users to download: {public_url}")
+```
+
+Users can paste that link into their browser or click it in an email, and the file downloads immediately over HTTPS.
+
+---
+
+#### 4. Command Line & Automation (`aws-cli` / `rclone`)
+
+Developers and automated pipelines can use standard S3 tools:
+
+```bash
+# Configure AWS CLI endpoint
+export AWS_ACCESS_KEY_ID="rustfsadmin"
+export AWS_SECRET_ACCESS_KEY="SuperSecureKey2026!"
+
+# List buckets
+aws --endpoint-url https://rustfs-s3-my-project.apps.mycluster.com s3 ls
+
+# Download a file
+aws --endpoint-url https://rustfs-s3-my-project.apps.mycluster.com s3 cp s3://reports/data.csv ./data.csv
+
+# Fast multi-threaded directory sync using rclone
+rclone sync :s3,endpoint=https://rustfs-s3-my-project.apps.mycluster.com:reports ./local-reports
+```
+
+---
+
+### Mode 2: Distributed High-Performance RustFS Cluster (StatefulSet + Ceph RBD)
+
+For high-throughput AI model serving, distributed caching, or data lake ingestion, RustFS can be deployed as a **distributed cluster** across multiple OpenShift nodes.
+
+In this architecture:
+
+* Each RustFS replica pod runs on a different worker node.
+* Each replica mounts its own dedicated, high-speed **Ceph RBD block volume** (`volumeMode: Filesystem`, `ReadWriteOnce`).
+* RustFS nodes communicate over internal port 9000 using erasure coding (EC) to provide unified S3 storage that survives node failures without relying on POSIX file locks.
+
+```text
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                   Distributed RustFS Storage Cluster                   │
+ │                                                                        │
+ │  ┌──────────────────────┐┌──────────────────────┐┌──────────────────┐  │
+ │  │   RustFS Pod 0       ││   RustFS Pod 1       ││  RustFS Pod 2    │  │
+ │  │   (Worker Node 1)    ││   (Worker Node 2)    ││  (Worker Node 3) │  │
+ │  │                      ││                      ││                  │  │
+ │  │  Mount: /data        ││  Mount: /data        ││  Mount: /data    │  │
+ │  │  PVC: ceph-rbd-0     ││  PVC: ceph-rbd-1     ││  PVC: ceph-rbd-2 │  │
+ │  │  (RWO Block Storage) ││  (RWO Block Storage) ││  (RWO Block)     │  │
+ │  └──────────┬───────────┘└──────────┬───────────┘└─────────┬────────┘  │
+ │             │                       │                      │           │
+ │             └───────────────────────┼──────────────────────┘           │
+ │                                     ▼                                  │
+ │                      Internal S3 Erasure-Coded Mesh                    │
+ └─────────────────────────────────────┬──────────────────────────────────┘
+                                       ▼
+                       Unified High-Availability S3 API
+```
+
+---
+
+### Architectural Comparison: Traditional Protocols vs. RustFS S3
+
+| Feature | In-Cluster SFTP | In-Cluster WebDAV | In-Cluster FileBrowser | RustFS (S3 Gateway) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Primary Protocol** | SSH / SFTP (Layer 4) | WebDAV / HTTP (Layer 7) | Web GUI / HTTP | **S3 API / HTTP (Layer 7)** |
+| **Ingress Friendly (Port 443)?** | ❌ No (Requires NodePort / LB) | ✅ Yes (OpenShift Route) | ✅ Yes (OpenShift Route) | ✅ **Yes (OpenShift Route)** |
+| **WinSCP Support?** | ✅ Native (SFTP) | ✅ Native (WebDAV) | ❌ No (Browser Only) | ✅ **Native (Amazon S3)** |
+| **Web Browser Support?** | ❌ No (Requires FTP app) | ⚠️ Primitive (basic auth) | ✅ Rich Web Explorer | ✅ **Embedded Web Console** |
+| **Pre-Signed URLs?** | ❌ No | ❌ No | ⚠️ Public share links | ✅ **Standard S3 Signatures** |
+| **Language & Engine** | OpenSSH (C) | Apache / Nginx (C) | Go | **Rust (Zero-GC, memory safe)** |
+| **Open Source License** | OpenSSH BSD | Apache 2.0 / BSD | AGPLv3 | **Apache 2.0** |
+| **Backend Storage** | CephFS (RWX) | CephFS (RWX) | CephFS (RWX) | **CephFS (RWX) or Ceph RBD (RWO)** |
+| **Throughput / Concurrency** | Medium | Medium | Medium | **High (Async Rust, Multi-core)** |
