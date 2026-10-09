@@ -22,6 +22,7 @@ A comprehensive architectural and operations guide covering PersistentVolumeClai
   * [Deep Dive 3: Universal In-Cluster SFTP Gateway & Sidecar Patterns](#deep-dive-3-universal-in-cluster-sftp-gateway--sidecar-patterns)
 * [5. Architecture Selection Decision Matrix](#architecture-selection-decision-matrix)
 * [6. Ceph RBD (`ocs-storagecluster-ceph-rbd`) vs. NAS (NFS / CephFS)](#deep-dive-ceph-rbd-ocs-storagecluster-ceph-rbd-vs-nas-nfs--cephfs)
+  * [What Do "Ceph" and "RBD" Stand For? (Origins & Acronyms)](#what-do-ceph-and-rbd-actually-stand-for-origins--acronyms)
   * [Core Architectural Difference: Block vs. File](#core-architectural-difference-block-vs-file)
   * [Why Ceph RBD is Better than NAS (7 Technical Advantages)](#why-ceph-rbd-is-better-than-nas-7-technical-advantages)
   * [Workload Decision Matrix: When to Choose RBD vs. NAS](#workload-decision-matrix-when-to-choose-rbd-vs-nas)
@@ -790,6 +791,49 @@ In OpenShift Data Foundation (ODF), you have two native storage classes:
 2. **CephFS (`ocs-storagecluster-cephfs`)**: Shared file storage (`ReadWriteMany`).
 
 A frequent architectural question is: **Why is Ceph RBD considered superior to NAS (NFS or CephFS) for application workloads, and what are the trade-offs?**
+
+---
+
+### What Do "Ceph" and "RBD" Actually Stand For? (Origins & Acronyms)
+
+Before exploring the architecture, understanding the naming and terminology clears up significant confusion:
+
+#### 1. "Ceph" is NOT an Acronym
+
+**Ceph** is a shortened name derived from **Cephalopod** (the biological class of marine animals that includes octopuses and squids).
+
+* **The Origin**: Created by Sage Weil at the University of California, Santa Cruz. He named it after cephalopods because:
+  * Octopuses have multiple distributed tentacles acting independently (symbolizing Ceph's decentralized, autonomous storage nodes).
+  * Cephalopods are renowned for high intelligence, flexibility, and adaptability (symbolizing Ceph’s self-healing algorithms).
+* **The Logo**: The official Ceph logo is literally a red stylized octopus/squid.
+
+#### 2. "RBD" = RADOS Block Device (Often Mistyped as "RDB")
+
+**RBD** stands for:
+> **R**ADOS **B**lock **D**evice
+
+To understand RBD, you must break down **RADOS**:
+
+* **RADOS** stands for:
+  > **R**eliable **A**utonomic **D**istributed **O**bject **S**tore
+
+RADOS is the low-level, foundational storage engine at the heart of Ceph that automatically stripes, replicates, and heals raw byte objects across physical disks.
+
+Therefore, **RBD (RADOS Block Device)** is the component of Ceph that presents raw virtual hard drives (`/dev/rbd0`) to worker nodes by striping blocks across the underlying RADOS object cluster.
+
+#### Quick Reference: Essential Ceph Acronyms
+
+| Acronym / Name | Full Form | What It Does in OpenShift |
+| :--- | :--- | :--- |
+| **Ceph** | Derived from **Cephalopod** *(squid/octopus)* | The overall distributed software-defined storage platform |
+| **RBD** | **RADOS Block Device** | Block storage driver (`ReadWriteOnce` disks for VMs, DBs) |
+| **RADOS** | **Reliable Autonomic Distributed Object Store** | The core self-healing object engine underneath everything |
+| **CephFS** | **Ceph File System** | POSIX-compliant shared file storage (`ReadWriteMany`) |
+| **RGW** | **RADOS Gateway** | S3 / OpenStack Swift REST API object gateway |
+| **OSD** | **Object Storage Daemon** | Process managing a single physical hard drive or NVMe SSD |
+| **MON** | **Monitor Daemon** | Maintains cluster consensus and cluster state maps (Paxos) |
+| **MDS** | **Metadata Server** | In-memory directory tree and inode manager for CephFS |
+| **CRUSH** | **Controlled Replication Under Scalable Hashing** | Mathematical algorithm that calculates data placement without lookup tables |
 
 ---
 
